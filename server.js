@@ -43,8 +43,55 @@ const server = http.createServer((req, res) => {
 
   // Kiểm tra máy chủ còn sống không
   if (req.method === "GET" && req.url === "/health") {
+    const k = API_KEY || "";
     res.writeHead(200, { "Content-Type": "application/json" });
-    return res.end(JSON.stringify({ ok: true, hasKey: !!API_KEY }));
+    return res.end(JSON.stringify({
+      ok: true,
+      hasKey: !!k,
+      platform: "render",
+      keyLength: k.length,
+      keyStart: k.slice(0, 7),
+      keyEnd: k.slice(-4),
+      keyHasSpace: /\s/.test(k),
+    }));
+  }
+
+  // Goi thu AI de xem loi that la gi
+  if (req.method === "GET" && req.url === "/test") {
+    if (!API_KEY) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      return res.end(JSON.stringify({ error: "Chua cai API key" }));
+    }
+    const testBody = JSON.stringify({
+      model: "claude-sonnet-5",
+      max_tokens: 20,
+      messages: [{ role: "user", content: "Say OK" }],
+    });
+    const tReq = https.request({
+      hostname: "api.anthropic.com",
+      path: "/v1/messages",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(testBody),
+        "x-api-key": API_KEY.trim(),
+        "anthropic-version": "2023-06-01",
+      },
+    }, (tRes) => {
+      let out = "";
+      tRes.on("data", (c) => (out += c));
+      tRes.on("end", () => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ httpStatus: tRes.statusCode, response: out }));
+      });
+    });
+    tReq.on("error", (e) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: e.message }));
+    });
+    tReq.write(testBody);
+    tReq.end();
+    return;
   }
 
   if (req.method !== "POST" || req.url !== "/api/chat") {
@@ -75,7 +122,7 @@ const server = http.createServer((req, res) => {
 
     // Giới hạn để tránh bị lạm dụng
     const safe = {
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-5",
       max_tokens: Math.min(payload.max_tokens || 1000, 1500),
       system: String(payload.system || "").slice(0, 2000),
       messages: (payload.messages || []).slice(-12).map((m) => ({
@@ -98,7 +145,7 @@ const server = http.createServer((req, res) => {
         headers: {
           "Content-Type": "application/json",
           "Content-Length": Buffer.byteLength(data),
-          "x-api-key": API_KEY,
+          "x-api-key": API_KEY.trim(),
           "anthropic-version": "2023-06-01",
         },
       },
