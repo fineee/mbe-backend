@@ -18,9 +18,15 @@ const ALLOWED = [
 ];
 
 function setCors(res, origin) {
-  const ok = ALLOWED.some((a) => origin && origin.startsWith(a));
-  res.setHeader("Access-Control-Allow-Origin", ok ? origin : ALLOWED[0]);
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  // Truong hop mo file .html truc tiep tu o dia:
+  // trinh duyet gui Origin la "null" hoac khong gui gi ca
+  if (!origin || origin === "null") {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+  } else {
+    const ok = ALLOWED.some((a) => origin.startsWith(a));
+    res.setHeader("Access-Control-Allow-Origin", ok ? origin : ALLOWED[0]);
+  }
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   res.setHeader("Access-Control-Max-Age", "86400");
 }
