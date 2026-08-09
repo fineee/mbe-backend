@@ -40,7 +40,7 @@ input,select,textarea,button{font-family:inherit}
 "use strict";
 var VER="v1.4.0";
 // ── Máy chủ AI Gia sư — đổi link này sau khi deploy lên Render.com ──
-var AI_BACKEND="";  // ví dụ: "https://mbe-backend.onrender.com"
+var AI_BACKEND="https://mbe-backend-tqys.onrender.com";
 function aiUrl(){
  var saved=store.get("mbe_ai_backend");
  if(saved)return saved.replace(/\/$/,"")+"/api/chat";
@@ -646,6 +646,31 @@ window._mbeSetAI=function(){
  });
 };
 
+
+// ── Đánh thức máy chủ AI sớm để học sinh không phải chờ ────────
+var _aiWarmed=false;
+function warmAI(){
+ if(_aiWarmed)return;
+ var base=(store.get("mbe_ai_backend")||AI_BACKEND||"").replace(/\/$/,"");
+ if(!base)return;
+ _aiWarmed=true;
+ fetch(base+"/health").then(function(r){return r.json();}).then(function(d){
+  console.log("[MBE] Máy chủ AI sẵn sàng:",d);
+ }).catch(function(){console.warn("[MBE] Máy chủ AI chưa phản hồi");});
+}
+// Gọi fetch có giới hạn thời gian, tránh treo mãi mãi
+function aiFetch(body,ms){
+ var ctrl=(typeof AbortController!=="undefined")?new AbortController():null;
+ var timer=setTimeout(function(){if(ctrl)ctrl.abort();},ms||90000);
+ return fetch(aiUrl(),{
+  method:"POST",
+  headers:{"Content-Type":"application/json"},
+  body:JSON.stringify(body),
+  signal:ctrl?ctrl.signal:undefined
+ }).then(function(r){clearTimeout(timer);return r;},
+        function(e){clearTimeout(timer);throw e;});
+}
+
 function pgHome(){
  var u=S.user,st=S.stats,t=today();
  var todayXP=(st.daily[t]||{}).xp||0,vct=vc(),ac=acc();
@@ -820,7 +845,7 @@ function pgSolver(){
   card('<div data-sex="1" style="cursor:pointer"><div style="font-size:12px;font-weight:500;color:#1e293b;margin-bottom:1px">📝 Example: '+x(EXS.de_vi)+'</div><div style="font-size:10px;color:#64748b">Click to see solution →</div></div>')+'</div>';
 }
 async function doSolve(pr){
- try{var r=await fetch(aiUrl(),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:'Bilingual Grade 6 math tutor. Return ONLY valid JSON, no markdown: {"de_vi":"...","de_en":"...","buoc":[{"so":1,"vi":"...","en":"...","ct":"...","gt":"...","isAnswer":false}]}. Last step isAnswer:true.',messages:[{role:"user",content:pr}]})});
+ try{var r=await aiFetch({model:"claude-sonnet-4-20250514",max_tokens:1000,system:'Bilingual Grade 6 math tutor. Return ONLY valid JSON, no markdown: {"de_vi":"...","de_en":"...","buoc":[{"so":1,"vi":"...","en":"...","ct":"...","gt":"...","isAnswer":false}]}. Last step isAnswer:true.',messages:[{role:"user",content:pr}]},90000);
   var d=await r.json();var txt=(d.content||[]).map(function(c){return c.text||"";}).join("").replace(/```json|```/g,"").trim();
   S.nav.res=JSON.parse(txt);S.nav.rv=0;
  }catch(e){S.nav.res=EXS;S.nav.rv=0;}rerender();
@@ -829,6 +854,7 @@ async function doSolve(pr){
 // ── TUTOR ──────────────────────────────────────────────────────────────
 var TOPICS=["Whole Numbers","Fractions","Decimals","Integers","Geometry","Sets","Powers","Probability"];
 function pgTutor(){
+ warmAI();
  var n=S.nav;if(!n.topic)n.topic="Whole Numbers";if(!n.tmode)n.tmode="both";
  if(!n.ready){
   return'<div><div style="display:flex;align-items:center;gap:8px;margin-bottom:14px"><div style="width:40px;height:40px;border-radius:50%;background:#fbbf24;display:flex;align-items:center;justify-content:center;font-size:22px">🦉</div><div><div style="font-size:14px;font-weight:500;color:#1e293b">AI Gia sư · Owl</div><div style="font-size:11px;color:#64748b">Grade 6 · Claude AI</div></div></div>'+
@@ -851,13 +877,19 @@ function pgTutor(){
 async function doTutor(q){
  var n=S.nav;if(!n.msgs)n.msgs=[];
  n.msgs.push({role:"user",content:q},{role:"assistant",content:"",typing:true});
+ // Sau 6 giây mà chưa có trả lời thì báo đang đợi máy chủ
+ var _waitMsg=setTimeout(function(){
+  var last=n.msgs[n.msgs.length-1];
+  if(last&&last.typing){last.content="⏳ Máy chủ đang khởi động, chờ chút nhé...";rerender();}
+ },6000);
+ n._waitMsg=_waitMsg;
  if(S.stats&&!S.stats.tutorUsed){S.stats.tutorUsed=1;saveStats();}
  rerender();
  var SYS={vi:'Bạn là Owl, gia sư Toán lớp 6. Chỉ về "'+n.topic+'". Tiếng Việt, ngắn.',en:'You are Owl, Grade 6 tutor. Only about "'+n.topic+'". English, concise.',both:'You are Owl, bilingual Grade 6 tutor. Only about "'+n.topic+'". Reply BOTH Vietnamese (VN:) and English (EN:).'};
  try{var hist=n.msgs.filter(function(m){return !m.typing;}).map(function(m){return{role:m.role,content:m.content};});
-  var r=await fetch(aiUrl(),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1000,system:SYS[n.tmode],messages:hist})});
-  var d=await r.json();n.msgs.pop();n.msgs.push({role:"assistant",content:(d.content||[]).map(function(c){return c.text||"";}).join("")||"Error."});
- }catch(e){n.msgs.pop();n.msgs.push({role:"assistant",content:(store.get("mbe_ai_backend")||AI_BACKEND)?"⚠️ Không kết nối được máy chủ AI.\nKiểm tra mạng rồi thử lại nhé!":"⚠️ AI Gia sư chưa có máy chủ.\n\nThầy cô vào Hồ sơ → 🤖 Máy chủ AI để cài đặt."});}
+  var r=await aiFetch({model:"claude-sonnet-4-20250514",max_tokens:1000,system:SYS[n.tmode],messages:hist},90000);
+  var d=await r.json();clearTimeout(n._waitMsg);n.msgs.pop();n.msgs.push({role:"assistant",content:(d.content||[]).map(function(c){return c.text||"";}).join("")||(d.error?("⚠️ "+(d.error.message||d.error)):"⚠️ Máy chủ trả lời rỗng.")});clearTimeout(n._waitMsg);
+ }catch(e){n.msgs.pop();n.msgs.push({role:"assistant",content:(store.get("mbe_ai_backend")||AI_BACKEND)?"⏳ Máy chủ đang khởi động (khoảng 30 giây).\nBạn thử hỏi lại sau một chút nhé!":"⚠️ AI Gia sư chưa có máy chủ.\n\nThầy cô vào Hồ sơ → 🤖 Máy chủ AI để cài đặt."});}
  rerender();var m=el("tmsg");if(m)m.scrollTop=m.scrollHeight;
 }
 
@@ -1046,7 +1078,7 @@ function pgProfile(){
    '<div><label style="'+LB2+'">Mật khẩu mới (≥6 ký tự)</label><input id="pnp" type="password" placeholder="••••••" style="'+IS2+'"/></div>'+
    '<div><label style="'+LB2+'">Xác nhận mật khẩu mới</label><input id="pcp" type="password" placeholder="••••••" style="'+IS2+'"/></div>'+
    '</div></div>'+
-   '<button id="psave" style="background:#1d4ed8;color:#fff;border:none;border-radius:8px;padding:10px;font-size:12px;cursor:pointer;font-weight:500;width:100%">💾 Lưu thay đổi</button>'+'<button onclick="window._mbeInstall&&window._mbeInstall()" style="background:#1a3a5c;color:#fbbf24;border:.5px solid #fbbf24;border-radius:8px;padding:9px;font-size:12px;cursor:pointer;font-weight:500;width:100%;margin-top:6px">📱 Cài như App (PWA)</button>'+((S.user.role==="admin"||S.user.role==="teacher")?'<button onclick="window._mbeSetAI&&window._mbeSetAI()" style="background:#faf5ff;color:#7c3aed;border:.5px solid #c4b5fd;border-radius:8px;padding:9px;font-size:12px;cursor:pointer;font-weight:500;width:100%;margin-top:6px">🤖 Máy chủ AI Gia sư</button>'+'<div style="font-size:10px;color:#64748b;margin-top:5px;text-align:center">'+(store.get("mbe_ai_backend")?"✅ Đã cài: "+store.get("mbe_ai_backend"):"⚠️ Chưa cài — AI Gia sư sẽ báo lỗi")+'</div>':"")+
+   '<button id="psave" style="background:#1d4ed8;color:#fff;border:none;border-radius:8px;padding:10px;font-size:12px;cursor:pointer;font-weight:500;width:100%">💾 Lưu thay đổi</button>'+'<button onclick="window._mbeInstall&&window._mbeInstall()" style="background:#1a3a5c;color:#fbbf24;border:.5px solid #fbbf24;border-radius:8px;padding:9px;font-size:12px;cursor:pointer;font-weight:500;width:100%;margin-top:6px">📱 Cài như App (PWA)</button>'+(true?'<button onclick="window._mbeSetAI&&window._mbeSetAI()" style="background:#faf5ff;color:#7c3aed;border:.5px solid #c4b5fd;border-radius:8px;padding:9px;font-size:12px;cursor:pointer;font-weight:500;width:100%;margin-top:6px">🤖 Máy chủ AI Gia sư</button>'+'<div style="font-size:10px;color:#64748b;margin-top:5px;text-align:center">'+((store.get("mbe_ai_backend")||AI_BACKEND)?"✅ Máy chủ: "+(store.get("mbe_ai_backend")||AI_BACKEND):"⚠️ Chưa cài — AI Gia sư sẽ báo lỗi")+'</div>':"")+
    '</div>')+'</div>';
 }
 
